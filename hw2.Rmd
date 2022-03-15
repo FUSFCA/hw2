@@ -1,0 +1,572 @@
+---
+title: "Homework#2"
+author: "Fahad Alsehami"
+date: "03/03/2022"
+knit:: (function(inputFile, encoding){
+  out_dir <- '../output';
+  rmarkdown::render(inputFile, encoding=encoding, output_file=file.path(dirname(inputFile), out_dir, 'Homework2.html')) })
+
+
+output:
+  html_document:
+    toc: yes
+    toc_depth: 5
+    code_folding: hide
+    theme: cosmo
+    highlight: tango
+    
+  html_notebook: default
+---
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+```
+
+### The  goals of this assigment is to perform exploratory data analysis, then building machine learning models that been taken for the class up the wekk #6 to make a prediction of the outcome along with performance models and selections:
+
+
+
+## Dataset information: Breast Cancer
+
+#### Description:
+The *breast-cancer-wisconsin.data* including features are computed from a digitized image of a fine needle aspirate (FNA) of a breast mass. They describe characteristics of the cell nuclei present in the image.
+
+Separating plane described above was obtained using Multisurface Method-Tree (MSM-T) [K. P. Bennett, "Decision Tree Construction Via Linear Programming." Proceedings of the 4th Midwest Artificial Intelligence and Cognitive Science Society, pp. 97-101, 1992], a classification method which uses linear programming to construct a decision tree. Relevant features were selected using an exhaustive search in the space of 1-4 features and 1-3 separating planes.
+
+The actual linear program used to obtain the separating plane in the 3-dimensional space is that described in: [K. P. Bennett and O. L. Mangasarian: "Robust Linear Programming Discrimination of Two Linearly Inseparable Sets", Optimization Methods and Software 1, 1992, 23-34].
+
+## Attribute Information:
+
+- Sample code number id number
+- Clump Thickness 1 - 10
+- Uniformity of Cell Size 1 - 10
+- Uniformity of Cell Shape 1 - 10
+- Marginal Adhesion 1 - 10
+- Single Epithelial Cell Size 1 - 10
+- Bare Nuclei 1 - 10
+- Bland Chromatin 1 - 10
+- Normal Nucleoli 1 - 10
+- Mitoses 1 - 10
+- Class: (2 for benign, 4 for malignant)
+
+## Required libraries for this assigment:
+```{r load labraries, include=FALSE}
+
+# A function to Install & loading required libraries to compute the project
+required_libraries <- c("DBI","paws","shiny", "shinythemes", "shinycssloaders", "dplyr", "ggplot2","ggthemes","DT","stringr","tidyr","dbplyr","DBI","splitstackshape","magrittr","tidyverse","shinyjs","data.table","plotly", "randomForest", "RColorBrewer","scales","caret", "GGally", "corrplot", "skimr", "glue", "janitor", "RPostgres", "devtools","RPostgreSQL", "formattable", "gmodels", "ggbeeswarm", "ppcor","polycor", "Hmisc", "ggm","boot", "e1071", "ggfortify","gridExtra", "wesanderson", "psych", "pastecs", "car","lattice","grid","kableExtra","knitr", "rayshader", "RCurl","PerformanceAnalytics","xts", "zoo","BiocGenerics","ROCR", "finalfit", "caret", "VIM", "simputation", "purrr", "squash", "janitor", "xgboost", "cowplot", "tree")
+
+missing_libraries <- required_libraries[!(required_libraries %in%
+                                            installed.packages()[,"Package"])]
+
+if(length(missing_libraries)) install.packages(missing_libraries)
+
+
+#A function to call the above libraries 
+
+libraries <- function(required_libraries){
+  for(package in required_libraries){
+    
+    if(!require(package, character.only = TRUE)){
+     
+      install.packages(package, dependencies = TRUE)
+    
+      library(package, character.only = TRUE)
+    }
+  }
+}
+libraries(required_libraries)
+```
+
+
+## Part 1: Reading dataset and EDA
+### Read dataset from github repo:
+```{r}
+#Read dataset from https://archive.ics.uci.edu/ml/datasets/breast+cancer+wisconsin+(original)
+x <- getURL("https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/breast-cancer-wisconsin.data")
+df <- read.csv(text = x)
+#dw.potability <- read.csv("./Data/drinking_water_potability.csv", header = TRUE, sep = ",")%>% glimpse()#using glimpse to have a quick look t the variables we have and the dimensions of the dataset
+#head(breast_cancer)
+```
+
+
+```{r}
+
+variabl_name <- colnames(df)
+colnames(df) <- c("id", "thickness", "uc_size", "uc_shape", "marginal", "se_size", "nuclei", "chromatin", "nor_nucleoli", "mitoses", "class")
+
+description <- c("is_number", "clump_thickness", "uniform_cell_size", "uniform_cell_shape", "marginal_adhesion", "single_epithelial_size", "bare_nuclei", "bland_chromatin", "normal_nucleoli", "mitoses", "class")
+
+
+
+df_description <- data.frame(cbind(variabl_name, description))
+
+kable(head(df_description),booktabs =T)%>%kable_styling(latex_options ="striped")
+head(df)
+```
+
+```{r}
+str(df)
+```
+### We have about 698 * 11 dimension dataset including 9 integer features and 1 charachter 
+
+```{r Clean Features Names }
+df1 <- df#
+df1[df1$class == '2',]$class <- "Benign"
+df1[df1$class == '4',]$class <- "Malignant"
+table(df1$class)
+
+#using janitor library to clean_names function to:
+#Returns names with only lowercase letters, with _ as a separator
+#Handles special characters and spaces
+#Appends numbers to duplicated names
+#Converts “%” to “percent” to retain meaning
+df1 <- df1 %>% 
+  mutate(class = as.factor(class), nuclei = as.integer(nuclei)) %>% #convert Int to factor in *Potability* feature
+  clean_names() %>% glimpse()
+
+```
+### Now, our features changed to lower cases and converted *class* to factor & *nuclei* as integer. I alos noticed that we have NAs values, and will perform an imputation
+
+```{r}
+summary(df1[, 2: 10]) # **id** is just an identifier of the patient 
+```
+```{r Checking Missing Values, warning=FALSE}
+df1 %>%
+  summarise_all(~ sum(is.na(.)))
+```
+
+```{r Checking Complete Cases, warning=FALSE}
+#Created a vector to subset the completed rows in the data set in case we need it a further computation
+completed.df <- df1[complete.cases(df1), ] 
+str(completed.df)
+
+```
+## It looks we have minor NAs in the feature *nuclei*, which is nearly 2% of the total data points we have in our dataset. As proportion of the dataset, it could not be that damage. However, I need consider it as it is related to an important feature. Therefore, I will perform an imputation for those NAs value with the the mean of *nuclei*'s values
+
+```{r}
+#Calling the required libraries for this chunk 
+library(ggplot2) # For visualization computation
+library(skimr)#which is similar to summary function, but with opinionated in its defaults 
+library(scales)# to converting from data values to perceptual properties
+library(forcats)#to handle categorical variables, variables that have a fixed and known set of possible values. Factors are also helpful for reordering character vectors to improve display
+
+
+#creating a new variables that filter our data set by using skim function and show the output as table
+skim.bc <- df1 %>%  skim() %>%
+   filter(n_missing != 0) %>%
+   as_tibble() %>%
+   mutate(n_missing, skim_variable, complete_rate) %>% #Mutate targeted variables produced by Skim function such as skim_variable, n_missing, complete_rate  to help us with missing rate classification
+   mutate(missing_rate = round(abs(complete_rate - 1) * 100, 1)) # adding *missing_rate* feature 
+
+
+skim.bc
+```
+
+```{r Subset, warning=FALSE}
+
+df2 <- df1[-1] # *id* has been excluded and the new data set reserved to be *df* for further computation
+
+df3 <- df[-1] # subset from the parent dataset
+```
+
+```{r Figure 1.1, warning=FALSE}
+p1 <- df1 %>%
+  group_by(class) %>%  skim() %>%
+  filter(n_missing != 0) %>%
+  as_tibble() %>%
+  dplyr::select(skim_variable, n_missing, complete_rate, class) %>%
+  mutate(missing_rate = round(abs(complete_rate - 1) * 100, 1)) %>%
+  ggplot(aes(
+    x = fct_reorder(skim_variable, n_missing),
+    y = missing_rate,
+    fill = skim_variable,
+    label = paste0(missing_rate, "%")
+  )) +
+  geom_col(width = .8) +
+  geom_text(
+    size = 4.2,
+    hjust = 1.12,
+    vjust = 0.20,
+    col = "grey"
+  ) +
+  coord_flip() +
+  facet_wrap(vars(class)) +
+  theme(aspect.ratio = .9) +
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(fill="dodgerblue1"),
+    strip.text = element_text(color = "white", face = "bold", size = 12)
+  ) +
+  scale_y_continuous(label = label_percent(scale = 1)) +
+  scale_colour_gradient(low = "orange", high = "red", na.value = NA) +
+  labs(
+    title = "Missing rate per skim_variables",
+    caption = "Figure 1.1",
+    x = "Skim_Variables",
+    y = "Freq"
+  )
+p1
+
+```
+
+### Based on (Figure 1.1), the propotion of the missing values per the targeted feature *class* which i have identified before:
+  - **class 2** ~ 3.1%
+  - **class 4** ~ 0.8%
+
+```{r Figure 1.2, warning=FALSE}
+
+p2 <- df1 %>%
+  dplyr::select(class) %>%
+  count(class) %>%
+  mutate(percent = paste0(round(n / sum(n) * 100), "%"), 2) %>%
+  ggplot(aes(
+    x = class,
+    y = n,
+    label = percent,
+    fill = class,
+  )) +
+  geom_col() +
+  geom_text(vjust =  15, color = "#ffffff") +
+  scale_colour_gradient(
+  low = "#132B43",
+  high = "#56B1F7",
+  space = "Lab",
+  na.value = "grey50",
+  guide = "colourbar",
+  aesthetics = "colour") +
+  labs(
+    title = "Distribution of the Class",
+    x = "Class 2 and 4",
+    y = "Distribution Frequency",
+    caption = "Figure 1.2"
+  )
+p2
+```
+
+### Distribution between two classes are unbalanced! 
+
+
+### Based on (Figure 1.2), ### The *class* insight shows that we have:
+  -   *class 2* is about 65%
+  -   *class 4* is about 35%
+
+### Part 2: Imputation Methods for the NAs value:
+1. Mean imputation 
+```{r}
+#create a new vector to Impute the missing values with the mean which is a naive solution to make this missing values filled  
+#Imputation method 1: mean 
+mean.df <- df3 %>%
+  group_by(class) %>%
+  mutate(across(where(is.numeric), ~if_else(is.na(.), mean(., na.rm = T), as.numeric(.)))) %>%
+  ungroup()
+
+head(mean.df)
+
+mean.df$class <- factor(mean.df$class, levels=c(2,4), label=c(0,1))
+#mean.df 
+```
+```{r}
+mean.df <- mean.df %>% 
+  mutate(class = as.factor(class), nuclei = as.integer(nuclei)) %>% #convert Int to factor in *Potability* feature
+  clean_names() %>% glimpse()
+```
+
+
+```{r}
+#Imputation method 2: feature imputation  
+feature_imputation <- kNN(df, k = 5, variable = c("nuclei"))
+
+head(feature_imputation)
+
+
+
+features.NAs <- df %>%
+  is.na(.) %>%
+  colSums() %>%
+  sort(decreasing = FALSE) %>%
+  names()
+```
+#Correlation shows how strong relationship between features, however, it is not the optimal and we need to bring more insightful correlation information: As a result, will construct a method to find out more informative needed for the correlation:
+
+```{r, warning=FALSE}
+#This function to compute the correlation 
+corr <- function(mean.df) { 
+   # r, n, and P matricies as data frame
+   M <- Hmisc::rcorr(as.matrix(mean.df)) #rcorr is Pearson or Spearman correlation matrix with pairwise deletion of missing data. However, it looks we don have a continuous feature which violate one or more of the *Pearson* rules
+   # L will return 3 data frames
+   L <- map(M, ~data.frame(.x))
+}
+
+
+#Show the correlation between all features
+corr(mean.df) %>% first() %>% head() %>% kable()
+
+```
+
+### Bellow will start a new approache to plot more informative correlation    
+```{r}
+#Will create tow features list to measure the correlations between those features and map them out!
+corr(mean.df) %>% 
+ map(~rownames_to_column(.x, var="features1")) %>%
+ # format each data set (r,P,n) long
+ map(~pivot_longer(.x, -features1, "features2")) %>%
+ # look at the first element of the list (r)
+ first() %>%
+ head() %>%
+ kable()
+```
+
+```{r}
+corr_function <- function(mean.df){
+ corr(mean.df) %>%
+ map(~rownames_to_column(.x, var="feature1")) %>% # Set (r = correlation ,P = p-value,n = sample size) 
+ map(~pivot_longer(.x, -feature1, "feature2")) %>% # Bind and merge feature1, feature2, value, and group them by id
+ bind_rows(.id = "id") %>%
+ pivot_wider(names_from = id, values_from = value) %>%
+ mutate(sig_p = ifelse(P < .05, T, F), p_if_sig = ifelse(P <.05, P, NA), r_if_sig = ifelse(P <.05, r, NA)) 
+}
+
+
+#Call the function
+corr_function(mean.df) %>% head() %>% kable()
+
+```
+#now, we can plot the correlation function 
+
+```{r}
+corr_function(mean.df) %>% 
+ ggplot(aes(feature1, feature2, fill=r, label=round(r_if_sig,2))) +
+ geom_tile() + 
+ labs(x = NULL, y = NULL, fill = "Pearson's\nCorrelation", title="Correlations in Breast Cancer", subtitle="Significant Pearson's correlation coefficients") + 
+ scale_fill_gradient2(mid="#FBFEF9",low="#0C6291",high="#A63446", limits=c(-1,1)) +
+ geom_text() +
+ theme_classic() +
+ scale_x_discrete(expand=c(0,0)) + 
+ scale_y_discrete(expand=c(0,0)) +
+ theme(text=element_text(family="Comic Sans MS"))
+```
+### uc_size and uc_shape have good indecation of correlations
+```{r, fig.height=9 , fig.width= 9}
+ggpairs(
+  mean.df,
+  aes(color = class),
+  columns = 1:9,
+  lower = list(continuous = wrap(
+    "smooth",
+    alpha = 0.2,
+    size = 0.5,
+    color = "#DE942E"
+  )),
+  diag = list(continuous = "barDiag"),
+  upper = list(continuous = wrap("cor", size = 4))
+) +
+  scale_color_manual(values = c("#1F5736", "#E94046")) +
+  scale_fill_manual(values = c("#1F5736", "#E94046")) +
+  theme(
+    axis.text = element_text(size = 8),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_rect(colour = "black"),
+    strip.background.y = element_rect(colour = "black"),
+    strip.text = element_text(color = "black", face = "bold", size = 8)
+  ) +
+  labs(
+    title = "Pair plot",
+    subtitle = "Pair Plot, scatter plot, Histogram and Correlation coefficient",
+    caption = "Figure 1.",
+    x = NULL,
+    y = NULL
+  )
+```
+
+```{r, fig.height=9 , fig.width= 9}
+p3 <- mean.df %>%
+  pivot_longer(cols = -class, names_to = "variables") %>%
+  ggplot(aes(x = variables, y = value)) +
+  geom_jitter(aes(y = value, col = class), alpha = 0.1) + # It adds a small amount of random variation to the location of each point, and is a useful way of handling overplotting caused by discreteness in smaller datasets.
+  geom_boxplot(aes(fill = class)) +
+  facet_wrap(vars(variables), ncol = 3, scales = "free") +
+  scale_color_manual(values = c("#E4652E", "#0E8A41")) +
+  #scale_colour_gradient(low = "orange", high = "red", na.value = NA) +
+  theme(
+    legend.position = "right",
+    strip.background = element_rect(fill = "#0B2D5B"),
+    strip.text = element_text(color = "white", face = "bold", size = 8)
+  ) +
+  labs(
+    title = "Outlier as Boxplot",
+    caption = "Figure 1.3.2"
+  )
+p3
+```
+
+
+
+
+```{r, fig.height=7 , fig.width= 7, warning=FALSE}
+
+df_corr <- cor(mean.df[-10])
+df_corr
+```
+
+```{r}
+#Randomly divided mean.df (dataset imputed by the mean)into a training  80% and a validation 20%
+
+
+#df1$class <- factor(df1$class, levels=c("Benign","Malignant"), label=c(0,1))
+
+set.seed(1234)
+
+train <- sample(nrow(mean.df), 0.8*nrow(df2))
+df.train <- df2[train,]
+df.validation <-df2[-train,]
+
+
+df.train$class <- as.factor(df.train$class)
+df.validation$class <- as.factor(df.validation$class)
+
+ctr <- trainControl(method="cv",
+                           number = 15,
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+
+```
+
+
+### Part 3: Building Models:
+
+- 3.1 Model 1: logst.model <- Logistic regression
+- 3.2 Model 2: svm.model   <- SVM
+- 3.3 Model 3: knn.model   <- KNN
+- 3.4 Model 4: rf.model    <- Random Forest
+```{r, results='hide', warning=FALSE, echo=FALSE}
+logist.model <- train(class ~., 
+                      data = df.train, 
+                      method = "glm", 
+                      metric = "ROC",
+                      preProcess = c("scale", "center"),
+                      na.action=na.exclude,
+                      trControl = ctr)
+ 
+
+pred.logist <- predict(logist.model, df2)
+evalResult.logist <- predict(logist.model, df.validation, type = "prob")
+predict.logist <- factor(colnames(evalResult.logist)[max.col(evalResult.logist)])
+cm.logist <- confusionMatrix(predict.logist, df.validation$class, "Malignant")
+cm.logist
+```
+
+```{r}
+
+rf.model <- train(class ~., data = df.train,
+                     method = "rf", 
+                     metric = 'ROC',
+                     trControl = ctr)
+
+rf.pred <- predict(rf.model, df.validation)
+cm.rf <- confusionMatrix(rf.pred, df.validation$class, "Malignant")
+cm.rf
+```
+
+```{r}
+plot(rf.model)
+```
+
+```{r}
+plot(rf.model$finalModel)
+```
+
+```{r}
+randomForest::varImpPlot(rf.model$finalModel, sort = TRUE, 
+           n.var = 10, main = "Features + predictive power")
+```
+
+
+```{r}
+knn.model <- train(class ~., data = df.train, 
+                      method = "knn", 
+                      metric = "ROC", 
+                      preProcess = c("scale", "center"), 
+                      trControl = ctr, 
+                      tuneLength =50)
+
+plot(knn.model)
+```
+
+```{r}
+pred.knn <- predict(knn.model, df.validation)
+cm.knn <- confusionMatrix(pred.knn, df.validation$class, "Malignant")
+cm.knn
+```
+
+```{r}
+set.seed(12345)
+svm.model <- train(class ~., data = df.train, method = "svmLinear", 
+                      metric = "ROC", 
+                      preProcess = c("scale", "center"), 
+                      trace = FALSE, 
+                      trControl = ctr)
+
+pred.svm <- predict(svm.model, df.validation)
+cm.svm <- confusionMatrix(pred.svm, df.validation$class, "Malignant")
+cm.svm
+```
+
+```{r}
+set.seed(12345)
+pca.model <- trainControl(method="cv",
+                              number = 15,
+                              preProcOptions = list(thresh = 0.9), # threshold for pca preprocess
+                              classProbs = TRUE,
+                              summaryFunction = twoClassSummary)
+
+svm.pca.model <- train(class~.,
+                          df.train, method = "svmLinear", metric = "ROC", 
+                          preProcess = c('center', 'scale', "pca"), 
+                          trControl = ctr)
+
+pred.svm.pca <- predict(svm.pca.model, df.validation)
+cm.svm.pca <- confusionMatrix(pred.svm.pca, df.validation$class, positive =  "Malignant")
+cm.svm.pca
+```
+# Model Evaluation:
+
+```{r}
+model.eva <- list(logisic = logist.model, rf = rf.model, 
+                   svm = svm.model, SVM_with_PCA = svm.pca.model)
+evaulations <- resamples(model.eva)
+
+summary(evaulations)
+```
+
+
+```{r}
+bwplot(evaulations, metric = "ROC", main = "Evaulations")
+```
+### Logistic model has variability as indecated in the Evaluation figure, random forest model is best one.
+
+
+
+```{r}
+model_nnetlda_df <- train(class ~., df.train, 
+                          method = "nnet", 
+                          metric = "ROC", 
+                          preProcess = c("center", "scale"), 
+                          tuneLength = 10, 
+                          trace = FALSE, 
+                          trControl = ctr)
+
+prediction_nnetlda_df <- predict(model_nnetlda_df, df.validation)
+cm_nnetlda_df <- confusionMatrix(prediction_nnetlda_df, df.validation$class, positive = "Malignant")
+cm_nnetlda_df
+```
+
+```{r, warn.conflicts = FALSE}
+cm.evaulations <- list( cm.rf = cm.rf, cm.svm.pca = cm.svm.pca, cm.svm = cm.svm, 
+                   cm.logist = cm.logist)
+#results <- map_df(cm.evaulations, function(x) x$byClass) %>% as_tibble() %>% 
+  mutate(summary = names(cm.rf$byClass))
+
+results
+```
